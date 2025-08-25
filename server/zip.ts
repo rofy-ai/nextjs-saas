@@ -35,33 +35,14 @@ export function createProjectZip(options: ZipOptions = {}): Promise<string> {
     } = options;
 
     const folderToZip = path.resolve(sourceDir);
+    const clientDir = path.join(folderToZip, 'client');
     const outputZipPath = path.resolve(outputDir, `${projectName}.zip`);
-    const outputFileName = path.basename(outputZipPath);
 
-    // Manual exclusions
-    const manualExclude = [
-      'server/index.ts',
-      'server/routes.ts',
-      'server/zip.ts',
-      'node_modules',
-      '.env',
-      'fly.toml',
-      'Dockerfile',
-      'package-lock.json',
-      '.dockerignore',
-      'dist',
-      'public/downloads',
-      'docker-entrypoint.sh',
-      outputFileName, // Exclude the zip file being written
-      ...additionalExcludes
-    ];
-
-    const gitignorePath = path.join(folderToZip, '.gitignore');
-    const gitIgnoreExclude = parseGitignore(gitignorePath);
-
-    // Combine and normalize ignore patterns
-    const allExcludes = [...manualExclude, ...gitIgnoreExclude];
-    const ignorePatterns = allExcludes.flatMap(e => [`**/${e}/**`, `**/${e}`]);
+    // Check if client directory exists
+    if (!fs.existsSync(clientDir)) {
+      reject(new Error('Client directory not found'));
+      return;
+    }
 
     // Setup zip stream
     const output = fs.createWriteStream(outputZipPath);
@@ -87,10 +68,8 @@ export function createProjectZip(options: ZipOptions = {}): Promise<string> {
 
     archive.pipe(output);
 
-    archive.glob('**/*', {
-      cwd: folderToZip,
-      ignore: ignorePatterns,
-    });
+    // Only include files from the client directory
+    archive.directory(clientDir, false);
 
     archive.finalize();
   });

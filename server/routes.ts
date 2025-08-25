@@ -100,7 +100,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
     // Move file to public folder
     await fs.rename(zipPath, publicFilePath);
 
-    await fetch("http://localhost:5001/api/restart-backend", {
+    await fetch("http://localhost:5001/api/restart-frontend", {
       method: "POST",
     });
 
