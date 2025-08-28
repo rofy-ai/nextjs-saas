@@ -9,18 +9,10 @@ WORKDIR /opt/appseed
 # Layer-friendly install: first lockfiles, then the rest
 COPY package*.json ./
 # For a dev server you likely need dev deps; drop --omit=dev if you use them
-RUN npm ci
+RUN npm ci --legacy-peer-deps
 
 # Now add the app source (src, public, etc.)
 COPY . .
-
-# ⬇️ NEW: install client deps after sources are copied
-# (won't fail if client/ doesn't exist)
-RUN if [ -d client ] && [ -f client/package.json ]; then \
-      cd client && npm i --legacy-peer-deps ; \
-    else \
-      echo "No client/ folder found or missing package.json — skipping client install"; \
-    fi
 
 # --- EntryPoint that seeds the volume by copying (no tar) ---
 COPY docker-entrypoint.sh /usr/local/bin/docker-entrypoint.sh
