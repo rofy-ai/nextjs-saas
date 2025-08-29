@@ -6,8 +6,8 @@
   "scripts": {
     "dev": "NODE_ENV=development nodemon --watch server --ext ts,js --exec tsx server/backend-server.ts",
     "dev-server": "NODE_ENV=development tsx server/index.ts",
-    "build": "vite build && esbuild server/index.ts --platform=node --packages=external --bundle --format=esm --outdir=dist",
-    "start": "NODE_ENV=production node dist/index.js",
+    "build": "cd client && npm run build",
+    "start": "cd client && npm run start",
     "check": "tsc",
     "db:push": "drizzle-kit push",
     "zip": "tsx server/zip.ts"
