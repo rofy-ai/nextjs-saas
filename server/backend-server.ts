@@ -20,21 +20,28 @@ const userAppDir = path.resolve(__dirname, "../client");
 let viteProcess: ChildProcess | null = null;
 
 function startViteDevServer() {
-  const vite = spawn("npx", ["vite"], {
+  const devServer = spawn("npm", ["run", "dev"], {
     cwd: userAppDir,
-    stdio: "inherit",
-    env: { ...process.env, FORCE_COLOR: "1" },
+    stdio: ["ignore", "pipe", "pipe"],
+    env: { ...process.env, FORCE_COLOR: "1", PORT: "5173" },
   });
 
-  vite.on("exit", (code, signal) => {
-    log(`vite exited with code ${code}, signal ${signal}`);
+  devServer.on("exit", (code, signal) => {
+    log(`dev server exited with code ${code}, signal ${signal}`);
   });
 
-  vite.on("error", (err: any) => {
-    log("vite process error:", err);
+  devServer.on("error", (err: any) => {
+    log("dev server process error:", err);
   });
 
-  viteProcess = vite;
+  devServer.stderr.on("data", (buf) => {
+    const block = buf.toString();
+    console.log("INSIDE HERE", block);
+    if (!block.trim()) return;
+    log(block.trim());
+  });
+
+  viteProcess = devServer;
 }
 
 function stopViteDevServer() {
