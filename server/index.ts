@@ -7,6 +7,8 @@ import { fileURLToPath } from "url";
 import { createProxyMiddleware } from "http-proxy-middleware";
 import cors from "cors";
 import http from "http";
+import fs from "fs";
+import 'dotenv/config';
 
 const allowedRoutes = [
   "/api/rofyDownloadFiles",
@@ -82,6 +84,46 @@ function restartDevServer() {
   startDevServer();
 }
 
+/* ------------------------- log viewer (served) ------------------------ */
+// Serve your logger script with no caching
+app.get("/log-viewer.js", (req, res) => {
+  const logViewerPath = path.join(__dirname, "../log-viewer.js");
+  res.setHeader("Content-Type", "application/javascript; charset=utf-8");
+  res.setHeader("Cache-Control", "no-store");
+  fs.readFile(logViewerPath, "utf8", (err, content) => {
+    if (err) {
+      console.error("Error serving log-viewer.js:", err);
+      res.status(404).send("// log-viewer.js not found");
+      return;
+    }
+    res.send(content);
+  });
+});
+
+/* ------------------------ HTML injection helpers ---------------------- */
+function isNavigationRequest(req: import("http").IncomingMessage) {
+  const h = req.headers;
+  const accept = String(h["accept"] || "");
+  const dest = String(h["sec-fetch-dest"] || "");
+  const mode = String(h["sec-fetch-mode"] || "");
+  const site = String(h["sec-fetch-site"] || "");
+  return (
+    req.method === "GET" &&
+    accept.includes("text/html") &&
+    dest === "document" &&
+    mode === "navigate" &&
+    (site === "none" || site === "same-origin" || site === "cross-site")
+  );
+}
+
+function injectHeadTag(html: string) {
+  if (html.includes('data-rofy="console-capture"')) return html;
+  const tag = `<script src="/log-viewer.js" data-rofy="console-capture" defer></script>`;
+  if (html.includes("</head>")) return html.replace("</head>", `${tag}</head>`);
+  if (html.includes("</body>")) return html.replace("</body>", `${tag}</body>`);
+  return `${html}\n${tag}`;
+}
+
 /* ----------------------------- middleware ---------------------------- */
 // Access logs (kept)
 app.use((req, res, next) => {
@@ -113,17 +155,62 @@ app.use("/api/downloads", express.static(path.join(__dirname, "../public/downloa
 
 /* ------------------------ unified proxy to :5173 ---------------------- */
 // One proxy instance reused for all non-guarded requests.
+// Now set selfHandleResponse to inject the logger only for navigations.
 const proxyToNext5173 = createProxyMiddleware({
   target: "http://localhost:5173",
   changeOrigin: true,
   ws: true, // websocket/HMR/SSE
+  selfHandleResponse: true,
+  on: {
+    proxyReq: (proxyReq, req, _res) => {
+    // Serve /log-viewer.js locally; don't proxy it.
+    if (req.url === "/log-viewer.js") return;
+
+    // For real navigations, force identity encoding so we can inject safely.
+    if (isNavigationRequest(req)) {
+      proxyReq.setHeader("accept-encoding", "identity");
+      console.log("[injector] Navigation detected → will inject logger");
+    }
+  },
+    proxyRes: (proxyRes, req, res) => {
+    // Let our local /log-viewer.js route handle itself.
+    if (req.url === "/log-viewer.js") {
+      res.statusCode = 404;
+      res.end();
+      return;
+    }
+
+    // Only rewrite top-level navigations; stream everything else unmodified.
+    if (!isNavigationRequest(req)) {
+      res.writeHead(proxyRes.statusCode || 200, proxyRes.headers as any);
+      proxyRes.pipe(res);
+      return;
+    }
+
+    const chunks: Buffer[] = [];
+    proxyRes.on("data", (c) => chunks.push(Buffer.isBuffer(c) ? c : Buffer.from(c)));
+    proxyRes.on("end", () => {
+      let body = Buffer.concat(chunks).toString("utf8");
+      body = injectHeadTag(body);
+
+      const headers = { ...(proxyRes.headers as any) };
+      delete headers["content-length"]; // changed size
+      headers["content-type"] = "text/html; charset=utf-8";
+      headers["cache-control"] = "no-store"; // avoid dev staleness
+
+      res.writeHead(proxyRes.statusCode || 200, headers);
+      res.end(body, "utf8");
+    });
+  }
+  }
 });
 
 // Guarded routes handled locally -> next()
 app.use((req, res, next) => {
   if (
     allowedRoutes.includes(req.originalUrl) ||
-    req.originalUrl.startsWith("/api/downloads/")
+    req.originalUrl.startsWith("/api/downloads/") ||
+    req.originalUrl === "/log-viewer.js" // ensure logger is served locally
   ) {
     return next();
   }
@@ -137,6 +224,7 @@ app.post("/api/restart-frontend", (_req, res) => {
   restartDevServer();
   res.json({ status: "dev server restarted" });
 });
+
 /* -------------------------------- boot -------------------------------- */
 (async () => {
   const server = await registerRoutes(app);
@@ -161,8 +249,9 @@ app.post("/api/restart-frontend", (_req, res) => {
 })();
 
 /* ----------------------------- notes ----------------------------------
-- All non-guarded requests (including /api/**) are proxied to Next on :5173.
-- Guarded local routes still terminate on this Express app.
-- In production, run your Next server on :5173 and keep this proxy layer as-is,
-  or front everything with a reverse proxy (Fly/Nginx) if preferred.
+- /log-viewer.js is served locally with no-store and injected into the main
+  HTML document returned by Next for navigations.
+- Injection triggers only on real page navigations (based on Sec-Fetch-* headers),
+  so module/asset requests pass through untouched.
+- Works for dev and prod as long as your Next app is reachable at :5173.
 ------------------------------------------------------------------------ */
