@@ -26,21 +26,60 @@ app.options("*", cors());
 app.use(express.json());
 app.use(express.urlencoded({ extended: false }));
 
+let previewHost: string | null = null;
+
 let viteProcess: ChildProcess | null = null;
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const userAppDir = path.resolve(__dirname, "../client");
 
-let userApiProcess: ChildProcess | null = null;
+
+function shrinkError(rawError:string|Error): string {
+  const text = typeof rawError === "string" ? rawError : rawError.stack || String(rawError);
+
+  const lines = text.split("\n");
+
+  // 1. Keep the first line (always has error message)
+  const firstLine = lines[0];
+
+  // 2. Grab any inline codeframe block (lines that look like " 37 | foo")
+  const codeframe = lines.filter(l => /^\s*\d+\s*\|/.test(l) || /^\s*>/.test(l)).join("\n");
+
+  // 3. Grab framework/plugin hint lines (vite, plugin, module, caused by)
+  const hints = lines.filter(l =>
+    /(Module|Caused by|File:|Request URL:)/i.test(l)
+  ).join("\n");
+
+  // 4. Compose output without stack trace "at ..."
+  return [firstLine, codeframe].filter(Boolean).join("\n\n");
+}
+
+function stripAnsi(str: string): string {
+  return str.replace(
+    // regex to match ANSI escape codes
+    /\u001b\[[0-9;]*m/g,
+    ''
+  );
+}
+
+function extractChatId(): string | null {
+  if (!previewHost) return null;
+  const m = previewHost.toLowerCase().match(/^preview-([^.]+)\./);
+  return m ? m[1] : null;
+}
+
 
 /* ------------------------------ logging ------------------------------ */
 function logErrors(message: string) {
-  console.log(`[${new Date().toISOString()}] ${message}`);
-  fetch("http://localhost:3000/api/logs", {
-    method: "POST",
-    body: JSON.stringify({ ts: Date.now(), kind: "error", data: message }),
-    headers: { "Content-Type": "application/json" },
-  }).catch((err) => {
+  const shrunk = shrinkError(message);
+  const stripAnsiString = stripAnsi(shrunk);
+  const chatId = extractChatId();
+  
+  fetch('https://api.rezzo.ai/reviewer/review-errors', {
+    method: 'POST',
+    body: JSON.stringify({ chatId, errorLogs: [stripAnsiString] }),
+    headers: { 'Content-Type': 'application/json' }
+  }).catch(err => {
     console.error("Failed to send log:", err);
   });
 }
@@ -64,7 +103,6 @@ function startDevServer() {
 
   devServer.stderr.on("data", (buf) => {
     const block = buf.toString();
-    console.log("INSIDE HERE", block);
     if (!block.trim()) return;
     logErrors(block.trim());
   });
@@ -107,6 +145,13 @@ function injectHeadTag(html: string) {
   if (html.includes("</body>")) return html.replace("</body>", `${tag}</body>`);
   return `${html}\n${tag}`;
 }
+
+app.use(async (req, res, next) => {
+  if (!previewHost) {
+    previewHost = req.headers.host || '';
+  }
+  next();
+});
 
 /* ----------------------------- middleware ---------------------------- */
 // Access logs (kept)
@@ -189,19 +234,6 @@ const proxyToNext5173 = createProxyMiddleware({
   }
 });
 
-// Guarded routes handled locally -> next()
-app.use((req, res, next) => {
-  if (
-    allowedRoutes.includes(req.originalUrl) ||
-    req.originalUrl.startsWith("/api/downloads/") ||
-    req.originalUrl === "/log-viewer.js" // ensure logger is served locally
-  ) {
-    return next();
-  }
-  // Everything else (both /api/** and page routes) -> Next on :5173
-  return proxyToNext5173(req, res, next);
-});
-
 /* ---------------------------- local routes ---------------------------- */
 // Restart Next dev server
 app.post("/api/restart-frontend", (_req, res) => {
@@ -231,6 +263,20 @@ app.post("/api/restart-frontend", (_req, res) => {
     log(`Main server listening on port ${port}`);
   });
 })();
+
+if (app.get("env") === "development") {
+  // Guarded routes handled locally -> next()
+  app.use((req, res, next) => {
+    if (
+      allowedRoutes.includes(req.originalUrl) ||
+      req.originalUrl.startsWith("/api/downloads/") 
+    ) {
+      return next();
+    }
+    // Everything else (both /api/** and page routes) -> Next on :5173
+    return proxyToNext5173(req, res, next);
+  });
+}
 
 /* ----------------------------- notes ----------------------------------
 - /log-viewer.js is served locally with no-store and injected into the main
