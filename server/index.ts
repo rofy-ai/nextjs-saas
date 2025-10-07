@@ -140,7 +140,7 @@ function isNavigationRequest(req: import("http").IncomingMessage) {
 
 function injectHeadTag(html: string) {
   if (html.includes('data-rofy="console-capture"')) return html;
-  const tag = `<script type="module" src="https://cdn.shopify.com/s/files/1/0823/3962/7304/files/log-viewer.js?v=1758289905" data-rofy="console-capture" defer></script>`;
+  const tag = `<script type="module" src="https://preview.rezzo.dev/js/reviewer.js" data-rofy="console-capture" defer></script>`;
   if (html.includes("</head>")) return html.replace("</head>", `${tag}</head>`);
   if (html.includes("</body>")) return html.replace("</body>", `${tag}</body>`);
   return `${html}\n${tag}`;
